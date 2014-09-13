@@ -51,6 +51,7 @@ if __name__=="__main__":
     stat1 = True    #overall status flag across all operations (true == no errors getting data)
     print AboutTitle + ", Ver: " + AboutVersion + "\n"
     
+    if Debug: print "***Running in DEBUG mode.  See Control2.py to disable***\n"
     doit = raw_input("Download transactions? (Y/N/I=Interactive) [Y] ").upper()
     if len(doit) > 1: doit = doit[:1]    #keep first letter
     if doit == '': doit = 'Y'
