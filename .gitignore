@@ -1,3 +1,10 @@
+# PocketSense files and folders that contain sensitive data (e.g. accounts and
+# encrypted credentials)
+connect.key
+ofx_config.cfg
+sites.dat
+xfr/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
