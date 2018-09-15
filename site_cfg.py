@@ -30,6 +30,17 @@
 #   - Added support for QuoteAccount option
 # 19Jan2014*rlc:  
 #   -Added EnableGoogleFinance option
+# 14Aug2016*rlc:
+#   -make accttype ucase
+# 11Mar2017*rlc:
+#   -remove ClientUID from general settings.  begin storing per site+username in ofx.py
+# 27Aug2017*rlc
+#   -explicitly match stock/fund multiplier as <space>m:value, requiring the space
+# 09Oct2017*rlc
+#   -change to use Yahoo json quote api
+#   -remove enableYahooScrape option
+# 06Dec2017*rlc
+#   -add GoogleURL as sites.dat option
 
 import os, glob, re, random
 from rlib1 import *
@@ -58,7 +69,7 @@ class site_cfg:
     #               "site2": {...}
     #               }
     #
-    #   Stocks are parsed into a list named stocks[].  Funds go into funds[] .
+    #   Stocks are parsed into a list named stocks[].  Funds go into funds[], although there is really no difference.
     #******************************************************************************
  
     def __init__(self):
@@ -72,8 +83,8 @@ class site_cfg:
         self.funds = []
         self.defaultInterval = 7
         self.promptInterval=False
-        self.YahooURL = 'http://finance.yahoo.com'
-        self.GoogleURL = 'http://www.google.com/finance'
+        self.YahooURL = 'http://query1.finance.yahoo.com/v7/finance/quote'
+        self.GoogleURL = 'http://finance.google.com/finance'
         self.datfile= 'sites.dat'
         self.bakfile= 'sites.bak'
         self.tmplfile = 'sites.template'
@@ -81,16 +92,16 @@ class site_cfg:
         self.savequotehistory = False
         self.showquotehtm = False
         self.askquotehtm = False
-        self.enableYahooScrape = True
         self.YahooTimeZone = '-5:EST'
         self.quotecurrency = 'USD'
-        self.clientuid = ""
         self.combineofx = False
         self.quietScrub = False
         self.forceQuotes = False
         self.quoteAccount = '0123456789'
         self.enableYahooFinance = True
         self.enableGoogleFinance = True
+        self.skipZeroTransactions = False
+        self.skipFailedLogon = True
     
         if glob.glob(self.datfile) == []:
             if glob.glob(self.bakfile) <> []:
@@ -115,13 +126,6 @@ class site_cfg:
         if i > -1:
             self.YahooURL = self.YahooURL[:i]
             print " * YahooURL truncated to", self.YahooURL, "\n"
-        
-        #if we don't have a clientuid defined, create a 24 digit random value & add to sites.dat
-        if not self.clientuid:
-            self.clientuid = str(ofxUUID())
-            f = open(self.datfile, 'a')
-            f.write("\nClientUID: " + self.clientuid + "\n")
-            f.close()
         
     def load_sites(self):
         f = open(self.datfile, 'r')
@@ -174,7 +178,7 @@ class site_cfg:
             if value:
                 if parsing:
                     if field == 'SITENAME': sitename = value.upper()
-                    elif field == 'ACCTTYPE': accttype = value
+                    elif field == 'ACCTTYPE': accttype = value.upper()
                     elif field == 'FIORG': fiorg = value
                     elif field == 'FID': fid = value
                     elif field == 'URL': url = value
@@ -208,9 +212,6 @@ class site_cfg:
 
                     if field == 'ENABLEYAHOOFINANCE':
                         self.enableYahooFinance = (value[:1].upper() == 'Y')
-                        
-                    if field == 'ENABLEYAHOOSCRAPE':
-                        self.enableYahooScrape = (value[:1].upper() == 'Y')
                     
                     if field == 'ENABLEGOOGLEFINANCE':
                         self.enableGoogleFinance = (value[:1].upper() == 'Y')
@@ -220,13 +221,13 @@ class site_cfg:
                     
                     if field == 'YAHOOTIMEZONE':
                         self.YahooTimeZone = value
+
+                    if field == 'GOOGLEURL':
+                        self.GoogleURL = value
                         
                     if field == 'QUOTECURRENCY':
                         self.quotecurrency = value
                         
-                    if field == 'CLIENTUID':
-                        self.clientuid = value
-            
                     if field == 'COMBINEOFX':
                         self.combineofx = (value[:1].upper() == 'Y')
                         
@@ -238,6 +239,12 @@ class site_cfg:
             
                     if field == 'QUOTEACCOUNT':
                         self.quoteAccount = value
+                    
+                    if field == 'SKIPZEROTRANSACTIONS':
+                        self.skipZeroTransactions = (value[:1].upper() == 'Y') 
+
+                    if field == 'SKIPFAILEDLOGON':
+                        self.skipFailedLogon = (value[:1].upper() == 'Y')  
            
            #end_for line
         
@@ -296,10 +303,10 @@ class site_cfg:
         return
     
     def parseTicker(self, line):
-        t = re.compile("(.+?) ")        #ticker symbol is first option
-        m = re.compile("M:(.+?) ")      #multiplier option
-        s = re.compile("S:(.+?) ")      #symbol to pass to Money (optional)
-        line += " "                     #pad a space onto the end for re.search
+        t = re.compile("(.+?) ")         #ticker symbol is first option
+        m = re.compile(" M:(.+?) ")      #multiplier option
+        s = re.compile(" S:(.+?) ")      #symbol to pass to Money (optional)
+        line += " "                      #pad a space onto the end for re.search
         tr = t.search(line)
         mr = m.search(line)
         sr = s.search(line)

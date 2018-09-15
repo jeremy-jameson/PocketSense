@@ -41,6 +41,11 @@
 # 25Feb2014*rlc
 #   - Bug fix for forceQuote option when the quote feature isn't being used
 
+# 14May2018*rlc
+#   - If an a connection fails for a specific user/pw combo, don't try other accounts during the session
+#     Added to help prevent accounts getting locked when a user changes their password, has multiple 
+#     accounts at the institution, but forgot to update their account settings in Setup.
+
 import os, sys, glob, time
 import ofx, quotes, site_cfg
 from control2 import *
@@ -96,17 +101,20 @@ if __name__=="__main__":
         for QEntry in Queue:
 
             if QEntry == 'Accts':
-               if len(AcctArray) == 0:
+                if len(AcctArray) == 0:
                   print "No accounts have been configured. Run SETUP.PY to add accounts"
 
-               #process accounts
-               for acct in AcctArray:
-                  status, ofxFile = ofx.getOFX(acct, interval)
-                  #status == False if ofxFile doesn't exist
-                  stat1 = stat1 and status
-                  if status: 
-                     ofxList.append([acct[0], acct[1], ofxFile])
-                  print ""
+                #process accounts
+                badConnects = []   #track [sitename, username] for failed connections so we don't risk locking an account
+                for acct in AcctArray:
+                    if [acct[0], acct[3]] not in badConnects:
+                        status, ofxFile = ofx.getOFX(acct, interval)
+                        if not status and userdat.skipFailedLogon: 
+                            badConnects.append([acct[0], acct[3]])
+                        else:
+                            ofxList.append([acct[0], acct[1], ofxFile])
+                        stat1 = stat1 and status
+                        print ""
                         
             #get stock/fund quotes
             if QEntry == 'Quotes' and getquotes:

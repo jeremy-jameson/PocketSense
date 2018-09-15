@@ -65,12 +65,19 @@
 #   -Fixed bug that popped up when EnableYahooFinace=No
 # 25Feb2014*rlc:
 #   -Changed try/catch for URLopen to catch *any* exception
+# 14Sep2015*rlc
+#   -Changed yahoo time parse to read hours in 24hr format
+# 09Nov2017*rlc
+#   -Replace Yahoo quotes csv w/ json
+#   -Removed yahooScrape option
+# 24Mar2018*rlc
+#   -Use longName when available for Yahoo quotes.  Mutual fund *family* name is sometimes given as shortName (see vhcox as example)
 
-import os, sys, time, urllib2, socket, shlex, re, csv, uuid
+import os, sys, time, urllib2, socket, shlex, re, csv, uuid, json
 import site_cfg
+from control2 import *
 from rlib1 import *
 from datetime import datetime
-from control2 import *
 
 join = str.join
 
@@ -105,28 +112,18 @@ class Security:
         #    name (n), lastprice (l1), date (d1), time(t1), previous close (p), %change (p2)
         
         if Debug: print "Getting quote for:", self.ticker
-        url = YahooURL+"/d/quotes.csv?s=%s&f=nl1d1t1pp2" % self.ticker
         
         self.status=False
         self.source='Y'
         #note: each try for a quote sets self.status=true if successful
         if eYahoo:
-            try:
-                csvtxt = urllib2.urlopen(url).read()
-                quote = self.csvparse(csvtxt)
-                self.quoteURL = YahooURL + '/q?s=%s&ql=1url' % self.ticker
-            except:
-                print "** An error occurred when connecting to the Yahoo CSV service"
-                self.status = False
-        
-            if not self.status and eYScrape:
-                # try screen scrape
-                csvtxt = self.YahooScrape()
-                quote = self.csvparse(csvtxt)        
-        
+            csvtxt = self.getYahooQuote()
+            quote = self.csvparse(csvtxt)
+            if self.status: self.source='Y'
+                        
         if not self.status and eGoogle:
             # try screen scrape
-            csvtxt = self.GoogleScrape()
+            csvtxt = self.getGoogleQuote()
             quote = self.csvparse(csvtxt)
             if self.status: self.source='G'
             
@@ -148,13 +145,11 @@ class Security:
             self.pchange = quote[5]
             
             #clean things up, format datetime str, and apply multiplier
-            #ampersand character (&) is not valid in OFX
-            self.name = self._removeIllegalChars(self.name)
-            # if security name is null, replace with name with symbol
-            if len(self.name.replace(" ", ""))==0: self.name = self.ticker
+            # if security name is null, replace name with symbol
+            if self.name.strip()=='': self.name = self.ticker
             self.price = str(float2(self.price)*self.multiplier)  #adjust price by multiplier
             self.date = self.date.lstrip('0 ')
-            self.datetime  = datetime.strptime(self.date + " " + self.time, "%m/%d/%Y %I:%M%p")
+            self.datetime  = datetime.strptime(self.date + " " + self.time, "%m/%d/%Y %H:%M%p")
             self.quoteTime = self.datetime.strftime("%Y%m%d%H%M%S") + '[' + YahooTimeZone + ']'
             if '?' not in self.pclose and 'N/A' not in self.pclose:
                 #adjust last close price by multiplier
@@ -163,7 +158,7 @@ class Security:
             name = self.ticker
             if self.symbol <> self.ticker:
                 name = self.ticker + '(' + self.symbol + ')'
-            print self.source+':' , name, self.price, self.date, self.time
+            print self.source+':' , name, self.price, self.date, self.time, self.pchange
 
                 
     def csvparse(self, csvtxt):
@@ -181,78 +176,53 @@ class Security:
 
         return quote
 
-    def YahooScrape(self):
-        #New screen scrape function: 02Sep2013*rlc
-        #   This function creates a csvtxt string with the same format as the Yahoo csv interface
-        #   as with all screen scrapers... any change to the html coding could introduce a glitch.
+    def getYahooQuote(self):
+        #read Yahoo json data api, and return csv
         
-        self.status = True  # fresh start
-        csvtxt = ""
-        if Debug: print "Trying Yahoo scrape for: ", self.ticker
-
-        #http://finance.yahoo.com/q?s=F0CAN05MQI.TO&ql=1
-        url = YahooURL+"/q?s=" + self.ticker+"&ql=1"
+        url = YahooURL + "?symbols=%s" % self.ticker
+        csvtxt=""
+        self.status=True
+        
         try:
-            ht=urllib2.urlopen(url).read().upper()
-            self.quoteURL = url
+            ht=urllib2.urlopen(url).read()
+            self.quoteURL = 'https://finance.yahoo.com/quote/%s' % self.ticker  #html link
         except:
-            print "** error reading " + url + "\n"
+            if Debug: print "** Error reading " + url + "\n"
             self.status = False
         
-        ticker = self.ticker.replace("^","\^")  #use literal regex character
         if self.status:
-            # example return: "Amazon.com, Inc.","78.46","9/3/2009","4:00pm", 80.00, "-1.96%"
             try:
-                #Name
-                t1 = '(<DIV CLASS="TITLE"><H2>)(.*?)(<)'
-                p = re.compile(t1)
-                rslt = p.findall(ht)
-                name= rslt[0][1]
-            
-                #Last price
-                t1 = '(<SPAN ID="YFS_L10_' + ticker + '">)(.*?)(</SPAN>)'
-                p = re.compile(t1)
-                rslt = p.findall(ht)
-                price= rslt[0][1]
+                j  = json.loads(ht)                     #parse json to dict
+                jd = j['quoteResponse']['result'][0]    #inside response pkg 
                 
-                #Date: Currently supports format as MMM dd  (Aug 30) or dd MMM (30 Aug).
-                #If a time is included, then cheat and assume that time is "now", since 
-                #Yahoo servers provide date/time combos in local formats
+                #use longName if available, otherwise use shortName field
+                try:
+                    name  = jd['longName']
+                except:
+                    name  = jd['shortName']
+                price     = jd['regularMarketPrice']
+                mtime     = jd['regularMarketTime']
+                lastPrice = jd['regularMarketPreviousClose']
+                changePer = jd['regularMarketChangePercent']
                 
-                #note that the span id is repeated for the date
-                t = '<SPAN ID="YFS_T10_' + ticker + '">'
-                t1 = '(' + t + t + ')(.*?)(</SPAN>)'
-                p = re.compile(t1)
-                rslt = p.findall(ht)
-                date1= rslt[0][1]
-                
-                tnow   = datetime.now()  	
-                yr     = tnow.year
-                if ':' in date1:
-                    qdate = tnow
-                else:
-                    try:
-                        qdate = datetime.strptime(date1, "%b %d")
-                    except:
-                        qdate = datetime.strptime(date1, "%d %b")  #throws outer exception if fails
+                qtime    = time.localtime(mtime)
+                qdateS   = time.strftime("%m/%d/%Y", qtime)
+                qtimeS   = time.strftime("%I:%M%p", qtime)
+                changeS = '{0:.2}%'.format(changePer)
 
-                    qdate = datetime(yr, qdate.month, qdate.day)
-                
-                #Sanity check on the date. Can't be in the future. Adjust to "last year" if needed
-                if qdate > tnow: qdate = datetime(yr-1,qdate.month,qdate.day)
-                
-                #write it out
-                date2 = qdate.strftime("%m/%d/%Y").lstrip('0 ')  #mm/dd/yyyy, but no leading zero or spaces
-                #note: price may contain commas, but we don't want them
-                price = ''.join([c for c in price if c in '1234567890.'])
-                csvtxt = '"' + name + '",' + price + ',"' + date2 + '","4:00pm",?,?'
-                if Debug: print "Screen scrape csvtxt=",csvtxt
+                name = '"' + self._removeIllegalChars(name) + '"'   #cleanup foreign chars and quote
+                csvtxt = ','.join([name, str(price), qdateS, qtimeS, str(lastPrice), changeS])
+
+                if Debug: print "Yahoo csvtxt=",csvtxt
+
             except:
+                #not formatted as expected?
+                if Debug: print "An error occured by parsing the Yahoo Finance reponse for: ", self.ticker
                 self.status=False
-                if Debug: print "Error during screen scrape attempt for: ", self.ticker
+
         return csvtxt
 
-    def GoogleScrape(self):
+    def getGoogleQuote(self):
         #New screen scrape function: 19-Jan-2014*rlc
         #  This function creates a csvtxt string with the same format as the Yahoo csv interface
         #  Example return: "Amazon.com, Inc.","78.46","9/3/2009","4:00pm", 80.00, "-1.96%"
@@ -265,8 +235,9 @@ class Security:
         #Example url:  https://www.google.com/finance?q=msft
         url = GoogleURL + "?q=" + self.ticker
         try:
-            ht=urllib2.urlopen(url).read().upper()
+            ht=urllib2.urlopen(url).read()
             self.quoteURL = url
+        
         except:
             print "** error reading " + url + "\n"
             self.status = False
@@ -280,7 +251,7 @@ class Security:
                 rslt = p.findall(ht)
                 name= rslt[0][1]
             
-                #Last price
+                #price
                 t1 = '(<meta itemprop="price".*?content=")(.*?)(")'
                 p = re.compile(t1, re.IGNORECASE | re.DOTALL)
                 rslt = p.findall(ht)
@@ -303,13 +274,16 @@ class Security:
                 qdate = datetime.strptime(date1, "%Y-%m-%dT%H:%M:%SZ")
                 date2 = qdate.strftime("%m/%d/%Y").lstrip('0 ')  #mm/dd/yyyy, but no leading zero or spaces
 
-                #note: price may contain commas, but we don't want them
+                
+                #name may contain commas and illegal chars, so clenaup & enclose in quotes
+                name = '"' + self._removeIllegalChars(name) + '"'
+                #price may contain commas, but we don't want them
                 price = ''.join([c for c in price if c in '1234567890.'])
-                csvtxt = '"' + name + '",' + price + ',"' + date2 + '","4:00pm",?,' + pchange
+                csvtxt = ','.join([name, price, date2, '04:00PM', '?', pchange])
                 if Debug: print "Google csvtxt=",csvtxt
             except:
                 self.status=False
-                if Debug: print "Error during Google Finance attempt for: ", self.ticker
+                if Debug: print "An error occured by parsing the Google Finance reponse for: ", self.ticker
         return csvtxt
         
 class OfxWriter:
@@ -471,7 +445,7 @@ class OfxWriter:
 #----------------------------------------------------------------------------
 def getQuotes():
 
-    global YahooURL, eYahoo, eYScrape, GoogleURL, eGoogle, YahooTimeZone
+    global YahooURL, eYahoo, GoogleURL, eGoogle, YahooTimeZone
     status = True    #overall status flag across all operations (true == no errors getting data)
     
     #get site and other user-defined data
@@ -481,7 +455,6 @@ def getQuotes():
     eYahoo = userdat.enableYahooFinance
     YahooURL = userdat.YahooURL
     GoogleURL = userdat.GoogleURL
-    eYScrape = userdat.enableYahooScrape
     eGoogle = userdat.enableGoogleFinance
     YahooTimeZone = userdat.YahooTimeZone
     currency = userdat.quotecurrency

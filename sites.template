@@ -28,37 +28,30 @@
 # 20Oct2013*rlc:  -Added QuoteAccount option to allow custom account number
 # 20Jan2014*rlc:  -Added EnableGoogleFinance option
 #                 -Added EnableYahooFinance option
+# 12Mar2017*rlc:  -Added support for OFX 2.x
+#                 -Added skipZeroTransactions option
+# 09Nov2017*rlc:  -Remove YahooScrape option no longer used
+#                 -Change alternate Yahoo url to json api
+# 22May2018*rlc:  -Added skipFailedLogon option
 # ******************************************************************************
-
 
 #Entries are (FieldName : Value) pairs, one per line.  Spacing/Tabs are ignored.
 #anything following a "#" symbol is ignored (treated as a comment)
 
-#define default download interval (days)
+#General settings
 #--------------------------------------------------------------------------------
-defaultInterval: 7
-
-#prompt user for alternate download interval?
-#--------------------------------------------------------------------------------
-promptInterval: No
-
-#Combine ofx files before sending to Money
-#Warning: Do not enable this option until you have tested all account settings, and
-#         have verified that data is loading correctly to Money accounts.
-#--------------------------------------------------------------------------------
-CombineOFX: No
-
-#Send stock/fund quotes to Money first?  Default = No
-#--------------------------------------------------------------------------------
-SaveTickersFirst: No
-
-#Save quote history to QuoteHistory.csv?  Default = No
-#--------------------------------------------------------------------------------
-SaveQuoteHistory: No
-
-#Suppress scrubber messages (default=No)
-#--------------------------------------------------------------------------------
-quietScrub: No
+defaultInterval: 7          #define default download interval (days)
+promptInterval: No          #prompt user for alternate download interval?
+SaveTickersFirst: No        #Send stock/fund quotes to Money first?  Default = No
+SaveQuoteHistory: No        #Save quote history to QuoteHistory.csv?  Default = No
+quietScrub: No              #Suppress scrubber messages (default=No)
+skipZeroTransactions: No    #Remove $0.00 transactions from downloaded statements
+CombineOFX: No              #Combine ofx files before sending to Money
+                            #Warning: Do not enable CombineOFX until you test all account settings, and
+                            #         verify that data is loading correctly to Money accounts.
+skipFailedLogon: Yes        #If a connection to a site fails during Getdata, no further connections
+                            #will be attempted for that site+username combo during the session.
+                            #default = Yes
 
 #--------------------------------------------------------------------------------
 #SITE LIST (example for each type)
@@ -79,7 +72,7 @@ quietScrub: No
 #   fid             Financial institution ID
 #   bankID          Bank ID
 #   brokerID        Broker ID
-#   ofxVer          OFX version.  Valid values are 102 and 103.  Default=102
+#   ofxVer          OFX version.  Valid values are 102, 103, 211, etc.  Default=102
 #   appID           Alternate Application ID (default defined in control2.py)
 #   appVer          Alternate Application Version (default defined in control2.py)
 #   minInterval     Mininum number of days to download (overrides defaultInterval if needed)
@@ -118,8 +111,9 @@ quietScrub: No
     url        : https://ofx.discovercard.com
     bankid     :
     brokerid   :
+    ofxVer     : 103
     appid      :
-    appver     :
+    appver     : 
     mininterval:
     timeOffset :
 </site>
@@ -147,7 +141,7 @@ quietScrub: No
     bankid     : 314074269
     brokerid   :
     appid      : QWIN
-    appver     : 1700
+    appver     : 2300
     mininterval:
     timeOffset :
 </site>
@@ -158,14 +152,15 @@ quietScrub: No
 #--------------------------------------------------------------------------------
 
 EnableYahooFinance: Yes       # Enable quote lookup on Yahoo Finance
-#YahooURL: http://ca.finance.yahoo.com  # Alternate site for quotes. Default = finance.yahoo.com
-#QuoteCurrency: USD           # Currency for quotes.  Default = USD
-EnableYahooScrape: Yes        # Try a screen scrape if the primary Yahoo interface fails
 EnableGoogleFinance: Yes      # Enable quote lookup on Google Finance
 YahooTimeZone: -5:EST         # Timezone rule for the Yahoo quote server (default = -5:EST).
 ShowQuoteHTM: No              # Always show quotes.htm from Getdata
 AskQuoteHTM: Yes              # Ask to show quotes.htm from Getdata (overrides ShowQuoteHTM)
 ForceQuotes: No               # Force Money to record a transaction when importing quotes*
+
+#YahooURL:  http://query1.finance.yahoo.com/v7/finance/quote
+#GoogleURL: https://finance.google.com/finance
+#QuoteCurrency: USD           # Currency for quotes.  Default = USD
 #QuoteAccount: 0123456789USD  # Custom account number for Quotes.  Default = 0123456789
                               # Account number can contain alpha-numeric (e.g., 123456789USD is valid)
                               

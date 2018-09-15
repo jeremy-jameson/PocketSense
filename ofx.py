@@ -48,10 +48,25 @@
 #     The appended "version" is stripped from the account# before passing 
 #     to the bank, but is used when sending the results to Money.  
 
-import time, os, sys, httplib, urllib2, glob, random
-import getpass, scrubber, site_cfg
-from rlib1 import *
+# 11Mar2017*rlc
+#   - Changed httplib requests to manually populate headers, due to Discover quackery
+#   - Add support for OFX 2.x (xml) exchange while responding to Discover issue
+#   - See discussions circa Mar-2017, and contributions from Andrew Dingwall
+#   - Add support for site and user specific ClientUID
+
+# 17May2017*rlc
+#   - Add V1 POST method as a fallback, for servers that don't like the newer header
+
+# 13Jul2017*rlc
+#   - Add support for session cookies in response to change @ Vanguard 
+
+# 24Aug2018*rlc
+#   - Remove CLTCOOKIE from request.  Not supported by Money 2005+ or Quicken
+
+import time, os, sys, httplib, urllib2, glob, random, re
+import getpass, scrubber, site_cfg, uuid
 from control2 import *
+from rlib1 import *
 
 if Debug:
     import traceback
@@ -64,43 +79,52 @@ argv = sys.argv
 userdat = site_cfg.site_cfg()
                                                
 class OFXClient:
-    """Encapsulate an ofx client, site is a dict containg siteuration"""
+    #Encapsulate an ofx client, site is a dict containg site configuration
     def __init__(self, site, user, password):
         self.password = password
         self.status = True
         self.user = user
         self.site = site
         self.ofxver = FieldVal(site,"ofxver")
+        self.url = FieldVal(self.site,"url")
+        
+        #example: url='https://test.ofx.com/my/script'
+        prefix, path = urllib2.splittype(self.url)
+        #path='//test.ofx.com/my/script';  Host= 'test.ofx.com' ; Selector= '/my/script'
+        self.urlHost, self.urlSelector = urllib2.splithost(path)
+        if Debug: 
+            print 'urlHost    :', self.urlHost
+            print 'urlSelector:', self.urlSelector, '\n'
         self.cookie = 3
-        site["USER"] = user
-        site["PASSWORD"] = password
 
     def _cookie(self):
         self.cookie += 1
         return str(self.cookie)
 
-    """Generate signon message"""
+    #Generate signon message
     def _signOn(self):
         site = self.site
-
-        clientuid=""
-        if "103" in self.ofxver: 
-            #include clientuid field only if version=103, otherwise the server may reject the request
-            clientuid = OfxField("CLIENTUID",userdat.clientuid)
+        ver  = self.ofxver
         
-        fidata = [OfxField("ORG",FieldVal(site,"fiorg"))]
-        fidata += [OfxField("FID",FieldVal(site,"fid"))]
-        return OfxTag("SIGNONMSGSRQV1",
-                    OfxTag("SONRQ",
-                    OfxField("DTCLIENT",OfxDate()),
-                    OfxField("USERID",FieldVal(site,"USER")),
-                    OfxField("USERPASS",FieldVal(site,"PASSWORD")),
-                    OfxField("LANGUAGE","ENG"),
-                    OfxTag("FI", *fidata),
-                    OfxField("APPID",FieldVal(site,"APPID")),
-                    OfxField("APPVER",FieldVal(site,"APPVER")),
-                    clientuid
-                    ))
+        clientuid=''
+        if int(ver) > 102: 
+            #include clientuid if version=103+, otherwise the server may reject the request
+            clientuid = OfxField("CLIENTUID", clientUID(self.url, self.user), ver)
+        
+        fidata = [OfxField("ORG",FieldVal(site,"fiorg"), ver)]
+        fidata += [OfxField("FID",FieldVal(site,"fid"), ver)]
+        rtn = OfxTag("SIGNONMSGSRQV1",
+                OfxTag("SONRQ",
+                OfxField("DTCLIENT",OfxDate(), ver),
+                OfxField("USERID",self.user, ver),
+                OfxField("USERPASS",self.password, ver),
+                OfxField("LANGUAGE","ENG", ver),
+                OfxTag("FI", *fidata),
+                OfxField("APPID",FieldVal(site,"APPID"), ver),
+                OfxField("APPVER", FieldVal(site,"APPVER"), ver),
+                clientuid
+                ))
+        return rtn
 
     def _acctreq(self, dtstart):
         req = OfxTag("ACCTINFORQ",OfxField("DTACCTUP",dtstart))
@@ -108,53 +132,62 @@ class OFXClient:
 
     def _bareq(self, bankid, acctid, dtstart, acct_type):
         site=self.site
+        ver=self.ofxver
         req = OfxTag("STMTRQ",
                 OfxTag("BANKACCTFROM",
-                OfxField("BANKID",bankid),
-                OfxField("ACCTID",acctid),
-                OfxField("ACCTTYPE",acct_type)),
+                OfxField("BANKID",bankid, ver),
+                OfxField("ACCTID",acctid, ver),
+                OfxField("ACCTTYPE",acct_type, ver)),
                 OfxTag("INCTRAN",
-                OfxField("DTSTART",dtstart),
-                OfxField("INCLUDE","Y"))
+                OfxField("DTSTART",dtstart, ver),
+                OfxField("INCLUDE","Y", ver))
                 )
         return self._message("BANK","STMT",req)
     
     def _ccreq(self, acctid, dtstart):
         site=self.site
+        ver  = self.ofxver
         req = OfxTag("CCSTMTRQ",
-              OfxTag("CCACCTFROM",OfxField("ACCTID",acctid)),
+              OfxTag("CCACCTFROM",OfxField("ACCTID",acctid, ver)),
               OfxTag("INCTRAN",
-              OfxField("DTSTART",dtstart),
-              OfxField("INCLUDE","Y")))
+              OfxField("DTSTART",dtstart, ver),
+              OfxField("INCLUDE","Y", ver)))
         return self._message("CREDITCARD","CCSTMT",req)
 
     def _invstreq(self, brokerid, acctid, dtstart):
         dtnow = time.strftime("%Y%m%d%H%M%S",time.localtime())
+        ver  = self.ofxver
         req = OfxTag("INVSTMTRQ",
-              OfxTag("INVACCTFROM",
-              OfxField("BROKERID", brokerid),
-              OfxField("ACCTID",acctid)),
-              OfxTag("INCTRAN",
-              OfxField("DTSTART",dtstart),
-              OfxField("INCLUDE","Y")),
-              OfxField("INCOO","Y"),
-              OfxTag("INCPOS",
-              OfxField("DTASOF", dtnow),
-              OfxField("INCLUDE","Y")),
-              OfxField("INCBAL","Y"))
+                OfxTag("INVACCTFROM",
+                    OfxField("BROKERID", brokerid, ver),
+                    OfxField("ACCTID",acctid, ver)),
+                OfxTag("INCTRAN",
+                    OfxField("DTSTART",dtstart, ver),
+                    OfxField("INCLUDE","Y", ver)),
+                OfxField("INCOO","Y", ver),
+                OfxTag("INCPOS",
+                    OfxField("DTASOF", dtnow, ver),
+                    OfxField("INCLUDE","Y", ver)),
+                OfxField("INCBAL","Y", ver))
         return self._message("INVSTMT","INVSTMT",req)
 
     def _message(self,msgType,trnType,request):
         site = self.site
+        ver  = self.ofxver
         return OfxTag(msgType+"MSGSRQV1",
                OfxTag(trnType+"TRNRQ",
-               OfxField("TRNUID",ofxUUID()),
-               OfxField("CLTCOOKIE",self._cookie()),
+               OfxField("TRNUID",ofxUUID(), ver),
                request))
     
     def _header(self):
         site = self.site
-        return join("\r\n",[ "OFXHEADER:100",
+        if self.ofxver[0]=='2':
+            rtn = """<?xml version="1.0" encoding="utf-8" ?>
+                     <?OFX OFXHEADER="200" VERSION="%ofxver%" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>"""
+            rtn = rtn.replace('%ofxver%', self.ofxver)
+
+        else:
+            rtn = join("\r\n",[ "OFXHEADER:100",
                            "DATA:OFXSGML",
                            "VERSION:" + self.ofxver,
                            "SECURITY:NONE",
@@ -162,11 +195,13 @@ class OFXClient:
                            "CHARSET:1252",
                            "COMPRESSION:NONE",
                            "OLDFILEUID:NONE",
-                           "NEWFILEUID:" + ofxUUID(),
+                           "NEWFILEUID:NONE",
                            ""])
+                           
+        return rtn
 
     def baQuery(self, bankid, acctid, dtstart, acct_type):
-        """Bank account statement request"""
+        #Bank account statement request
         return join("\r\n",
                     [self._header(),
                      OfxTag("OFX",
@@ -177,13 +212,13 @@ class OFXClient:
                 )
                         
     def ccQuery(self, acctid, dtstart):
-        """CC Statement request"""
+        #CC Statement request
         return join("\r\n",[self._header(),
                     OfxTag("OFX",
                     self._signOn(),
                     self._ccreq(acctid, dtstart))])
 
-    def acctQuery(self,dtstart):
+    def acctQuery(self,dtstart='19700101000000'):
         return join("\r\n",[self._header(),
                     OfxTag("OFX",
                     self._signOn(),
@@ -197,37 +232,82 @@ class OFXClient:
 
     def doQuery(self,query,name):
         # urllib doesn't honor user Content-type, use urllib2
-        garbage, path = urllib2.splittype(FieldVal(self.site,"url"))
-        host, selector = urllib2.splithost(path)
+
         response=False
         try:
             errmsg= "** An ERROR occurred attempting HTTPS connection to"
-            h = httplib.HTTPSConnection(host, timeout=5)
-
+            h = httplib.HTTPSConnection(self.urlHost, timeout=5)
+            if Debug: h.set_debuglevel(1)
+            
+            #proxy config for fiddler tests
+            #h = httplib.HTTPSConnection('localhost:8888', timeout=5)
+            #h.set_tunnel(self.urlHost)
+            
             errmsg= "** An ERROR occurred sending POST request to"
-            p = h.request('POST', selector, query, 
-                     {"Content-type": "application/x-ofx",
-                      "Accept": "*/*, application/x-ofx"}
-                     )
+            
+            #try without a user-agent or cookie, and retry if the first one fails
+            #if both fail, revert to V1 request method
+            
+            response = None
+            
+            for i in [0,1,2]:
+                if i in [0,1]:
+                    #V2 request supports latest Discover
+                    h.putrequest('POST', self.urlSelector, skip_host=1, skip_accept_encoding=1)
+                    
+                    h.putheader('Content-Type', 'application/x-ofx')
+                    h.putheader('Host', self.urlHost)
+                    h.putheader('Content-Length', str(len(query)))
+                    h.putheader('Connection', 'Keep-Alive')
+                    
+                    #optional parameters are appended only when failure on first pass
+                    #   + cookies are added if provided by server on first pass
+                    #   + user-agent is always added on second pass
+                    if i==1:
+                        h.putheader('User-Agent', 'PocketSense')
+                        #this is our second pass, so add session cookies if found in first response
+                        cookie = response.getheader('set-cookie')   #server cookie(s) provided in last response
+                        if cookie <> None: 
+                            if Debug: print '<Response Cookies>', cookie
+                            h.putheader('cookie', cookie)
+                    h.endheaders(query)
 
-            errmsg= "** An ERROR occurred retrieving POST response from"
-            #allow up to 30 secs for the server response (it has to assemble the statement)
-            h.sock.settimeout(30)      
-            response = h.getresponse().read()
+                else:
+                   #i=2: try V1 request (deprecated).  Shouldn't get here... keeping "just in case"
+                   h.request('POST', self.urlSelector, query, 
+                             {"Content-type": "application/x-ofx",
+                              "Accept": "application/x-ofx"})
+                    
+                errmsg= "** An ERROR occurred retrieving POST response from"
+                #allow up to 30 secs for the server response (if it takes longer, something's wrong)
+                h.sock.settimeout(30) 
+                response = h.getresponse()
+                respDat  = response.read()
+            
+                #if this is a OFX 2.x response, replace the header w/ OFX 1.x
+                if self.ofxver[0] == '2':
+                    respDat = re.sub(r'<\?.*\?>', '', respDat)      #remove xml header lines like <? content...content ?>
+                    respDat = OfxSGMLHeader() + respDat.lstrip()
+            
+                #did we get a valid response?  if not, try again w/ different request header
+                if validOFX(respDat)=='': break
+            
             f = file(name,"w")
-            f.write(response)
+            f.write(respDat)
             f.close()
-        except Exception as inst:
+            
+        except Exception as e:
             self.status = False
-            print errmsg, host
-            print "   Exception type:", type(inst)
-            print "   Exception Val :", inst
+            print errmsg, self.urlHost
+            print "   Exception type  :", type(e)
+            print "   Exception val   :", e
+
             if response:
                 print "   HTTPS ResponseCode  :", response.status
                 print "   HTTPS ResponseReason:", response.reason
 
-        if h: h.close()
-            
+        if h: h.close()   
+        
 #------------------------------------------------------------------------------
 
 def getOFX(account, interval):
@@ -273,7 +353,7 @@ def getOFX(account, interval):
     
     try:
         if acct_num == '':
-            query = client.acctQuery("19700101000000")       #19700101000000 is just a default DTSTART date/time string
+            query = client.acctQuery()
         else:
             caps = FieldVal(site, "CAPS")
             if "CCSTMT" in caps:
@@ -299,7 +379,7 @@ def getOFX(account, interval):
             print query
             print
             ask = raw_input('DEBUG:  Send request to bank server (y/n)?').upper()
-            if ask=='N': return False, ''
+            if ask=='N': return True, ''
         
         #do the deed
         client.doQuery(query, ofxFileName)
@@ -321,18 +401,13 @@ def getOFX(account, interval):
                 f.close()
                 
             content = ''.join(a for a in content if a not in '\r\n ')  #strip newlines & spaces
-           
-            if content.find('OFXHEADER:') < 0 and content.find('<OFX>') < 0 and content.find('</OFX>') < 0:
+            msg = validOFX(content)  #checks for valid format and error messages
+            
+            if msg<>'':
                 #throw exception and exit
-                raise Exception("Invalid OFX statement.")
+                raise Exception(msg)
                 
-            #look for <SEVERITY>ERROR code... rlc*2013
-            if content.find('<SEVERITY>ERROR') > 0:
-                #throw exception and exit
-                raise Exception("OFX message contains ERROR condition")
-
             #attempted debug of a Vanguard issue... rlc*2010
-            #if content.find('<INVPOSLIST>') > -1 and content.find('<SECLIST>') < 0:    #DEBUG: rlc*5/2011
             if content.find('<INVPOS>') > -1 and content.find('<SECLIST>') < 0:
                 #An investment statement must contain a <SECLIST> section when a <INVPOSLIST> section exists
                 #Some Vanguard statements have been missing this when there are no transactions, causing Money to crash

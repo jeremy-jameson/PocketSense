@@ -15,10 +15,22 @@
 # 19Sep2013*rlc
 #   - Single line change to menu text
 
-import os, sys, glob, pickle, shutil, time
+# 11Mar2017*rlc
+#   - Add support for user-specific clientUID keys
 
-import pyDes, ofx, quotes, site_cfg, filecmp, rlib1
-from control2 import *   #common control/utilities
+# 11May2017*rlc
+#   - increase field width for account# to handle yet another Discover change
+
+# 14May2018*rlc
+#   - added account query during setup
+
+#23Aug2018*rlc
+#   - bug fix w/ adding new account
+
+import os, sys, glob, re, pickle, shutil, time, urllib2
+import pyDes, ofx, quotes, site_cfg, filecmp
+import rlib1  #common control/utilities
+from control2 import *  #global settings
 
 if Debug:
     import traceback
@@ -39,20 +51,25 @@ def separator_line(txt='', before=0, after=0):
     print '-'*flen + txt + '-'*(w-flen-l)
     if after > 0: print '\n' * after
 
-def list_accounts():
+def list_accounts(showConnectKeys=False):
     i=1   
     print '\n\n'
-    print '{0:22}{1:20}{2:14}{3}'.format('Site','Account','Type','UserName')
+    print '{0:22}{1:24}{2:14}{3}'.format('Site','Account','Type','UserName')
     print '-'*70
     for acct in AcctArray:
         sitename = acct[0]
+        account  = acct[1]
+        type     = acct[2]
+        user     = acct[3]
         if sitename in Sites:
-            type = FieldVal(Sites[sitename], 'caps')[1]  #default to showing the acctType from sites.dat
+            type = rlib1.FieldVal(Sites[sitename], 'caps')[1]  #default to showing the acctType from sites.dat
+            url = rlib1.FieldVal(Sites[sitename],'url')
+            clientUID = rlib1.clientUID(url, user)
             if   type == 'INVSTMT': type = 'INVESTMENT'
             elif type == 'CCSTMT':  type = 'CREDIT CARD'
-            if type == 'BASTMT':                         #if it's a bank account, show the actual type
-                type = acct[2]
-            print '{0:4}{1:18}{2:20}{3:14}{4}'.format(str(i)+'.',sitename,acct[1],type,acct[3])
+            print '{0:4}{1:18}{2:24}{3:14}{4}'.format(str(i)+'.',sitename,account,type,user)
+            if showConnectKeys and clientUID<>None: 
+                print '\t\t      ConnectKey: %s\n' % (clientUID)
         else:
             print '{0:4}{1:18}{2}'.format(str(i)+'.',sitename, '** Site not found in SITES.DAT **')
         i=i+1
@@ -60,6 +77,7 @@ def list_accounts():
 def config_account():
    
     #configure account settings
+    tmpfile='acctQuery.tmp'
     i=1
     separator_line('Site List', 1)
     for site in Sitenames:
@@ -67,64 +85,112 @@ def config_account():
         i=i+1
     print '0. Exit'
     separator_line()
-    sitenum = get_int('Enter Site #: [0] ')
+    sitenum = rlib1.get_int('Enter Site #: [0] ')
     
     if sitenum <> 0 and sitenum <= len(Sitenames):
         sitenum = sitenum - 1   #index into array
         sitename = Sitenames[sitenum]
         print '\nConfigure account for', sitename, '\n'
-        account  = raw_input('Account #       : ')
         username = raw_input('User name       : ')
         password = raw_input('Account password: ')
+        
+        #query server for available (valid) accounts for user
+        stat=True
+        try:
+            client = ofx.OFXClient(userdat.sites[sitename], username, password)
+            query = client.acctQuery()
+            if Debug: print query
+            client.doQuery(query, tmpfile)
+            if not client.status: stat=False
+        except Exception as inst:
+            stat=False
+            print inst
+        
+        with open(tmpfile, "r") as f:  response = f.read()
+        if not Debug: os.remove(tmpfile)
+        
+        if not stat or not '<ACCTID>' in response:
+            print "An error occurred requesting accounts from the site.  Please check username and password.\n"
+            ans = raw_input('Continue configuring account (Yes/No): [N] ') or 'N'
+            stat = True if ans[0].upper() == 'Y' else False
 
-        acctype = ''
-        #if this is a bank account, get the type (checking/savings)
-        if 'BASTMT' in FieldVal(Sites[sitename],'CAPS'):
-            selnum = -1
-            while selnum < 0 or selnum > len(BankTypes):
-                i = 1
-                separator_line('Type of Bank Account', 1)
-                for type in BankTypes:
-                    print str(i)+'.', type
-                    i=i+1
+        if stat:
+            #list accounts and prompt for entry
 
-                print str(0)+'.', 'Cancel'
-                separator_line()
-                selnum= get_int('Enter account type: [0] ')
-                if selnum == 0: return
-                
-            acctype = BankTypes[selnum-1]
+            #account numbers may be masked, so we allow actual account numbers too
+            print '\n\n*****************'
+            print '  NOTE:  If the account number is masked (e.g., XXXX-XX-1234), '
+            print '         you MUST manually enter the account number'
+            print '*****************\n'
+            print '\nEnter line #, *or* the actual account number\n'
+            print '\nAccount List'
+            print '------------'
+            alist = re.findall(r'<ACCTID>(.*?)<', response,         #get list of account entries
+                               flags=re.DOTALL | re.IGNORECASE)   
+            alist = [a.rstrip() for a in alist]                     #strip trailing whitespace/newlines/etc
+            alist = sorted(alist)
             
-        #look for pre-existing entry.  delete if found.
-        exists = False
-        for acct in AcctArray:
-            if acct[0] == sitename and acct[1] == account:
-                #duplicate entry... replace it
-                exists = True
-                AcctArray.remove(acct)
-                break
-        
-        if exists:
-            print "Replacing", account, "for", sitename
-        else:
-            print "Adding", account, "for", sitename
-        
-        acct = [sitename, account, acctype, username, password]
-        AcctArray.append(acct)
-        
-        #test the new account?
-        test = raw_input('Do you want to test transaction downloads for the new account now (y/n)? ').upper()
-        if test=='Y':
-            test_acct(acct)
+            i=1
+            for a in alist:
+                print '%i. %s' % (i, a)
+                i+=1
+            
+            account  = raw_input('\nAccount #       : ') or 0
+            if account==0: 
+                raw_input("No account selected.  Press <Enter> to return to the main menu")
+                return
+                
+            if len(account) < 3: account = alist[int(account)-1]
+            
+            acctype = ''
+            #if this is a bank account, get the type (checking/savings)
+            if 'BASTMT' in rlib1.FieldVal(Sites[sitename],'CAPS'):
+                selnum = -1
+                while selnum < 0 or selnum > len(BankTypes):
+                    i = 1
+                    separator_line('Type of Bank Account', 1)
+                    for type in BankTypes:
+                        print str(i)+'.', type
+                        i=i+1
+
+                    print str(0)+'.', 'Cancel'
+                    separator_line()
+                    selnum= rlib1.get_int('Enter account type: [0] ')
+                    if selnum == 0: return
+                    
+                acctype = BankTypes[selnum-1]
+                
+            #look for pre-existing entry.  delete if found.
+            exists = False
+            for acct in AcctArray:
+                if acct[0] == sitename and acct[1] == account:
+                    #duplicate entry... replace it
+                    exists = True
+                    AcctArray.remove(acct)
+                    break
+            
+            if exists:
+                print "Replacing", account, "for", sitename
+            else:
+                print "Adding", account, "for", sitename
+            
+            acct = [sitename, account, acctype, username, password]
+            AcctArray.append(acct)
+            
+            #test the new account?
+            test = raw_input('Do you want to test transaction downloads for the new account now (y/n)? ').upper()
+            if test=='Y':
+                test_acct(acct)
             
 def test_acct(acct):
     status, ofxfile = ofx.getOFX(acct,31)
-    if  status:
-        print 'Download completed successfully\n\n'
-        test = raw_input('Send the results to Money (y/n)? ').upper()
-        if test=='Y':
-            rlib1.runFile(ofxfile)
-            raw_input('Press Enter to continue...')
+    if status:
+        if ofxfile <>'':
+            print 'Download completed successfully\n\n'
+            test = raw_input('Send the results to Money (y/n)? ').upper()
+            if test=='Y':
+                rlib1.runFile(ofxfile)
+                raw_input('Press Enter to continue...')
     else:
         print 'An online error occurred while testing the new account.'
         
@@ -174,17 +240,19 @@ if __name__=="__main__":
     Sitenames.sort()
     
     #do we already have a configuration file?  if so, read it in.
-    pwkey, c_getquotes, AcctArray = get_cfg()
+    pwkey, c_getquotes, AcctArray = rlib1.get_cfg()
     
     #is the file password protected?  If so, we need to get passkey and decrypt the account info
     if pwkey <> '':
-        pwkey=decrypt_pw(pwkey)
-        acctDecrypt(AcctArray, pwkey)
+        pwkey=rlib1.decrypt_pw(pwkey)
+        rlib1.acctDecrypt(AcctArray, pwkey)
    
     #**********main menu***********
     menu_option = 1
     while menu_option <> 0:
 
+        #sort accounts by site+username+account
+        AcctArray = sorted(AcctArray, key = lambda x: (x[0], x[3], x[1]))
         if pwkey == '':
             menu_4 = '4. Encrypt account settings'
             menu_5 = ''
@@ -200,7 +268,7 @@ if __name__=="__main__":
         separator_line('Main Menu', 1)
         print "1. Add or Modify Account"
         print "2. List Accounts"
-        print "3. Delete Account"
+        print "3. Delete Account (or reset connection)"
         print menu_4
         print menu_5
         print menu_6
@@ -208,7 +276,7 @@ if __name__=="__main__":
         print "8. About"
         print "0. Save & Exit"
         separator_line()
-        menu_option=get_int('Selection: [0] ')
+        menu_option=rlib1.get_int('Selection: [0] ')
 
     #process menu menu_optionion
         if menu_option == 1:
@@ -217,22 +285,40 @@ if __name__=="__main__":
             
         elif menu_option == 2:
             #list existing accounts
-            list_accounts()
+            action = raw_input('Show account connection keys? Y/N [N]: ').upper()
+            if action=='': action='N'
+            list_accounts(action[0]=='Y')
             
         elif menu_option == 3:
             #delete an account
             list_accounts()
             print "0.  None"
             separator_line()
-            acctnum = get_int('Delete account #: [0] ')
-            if acctnum <= len(AcctArray) and acctnum <> 0:
-                acctnum = acctnum-1
-                #delete the account
-                print "Deleting account", AcctArray[acctnum][0], ":", AcctArray[acctnum][1]
-                doit = raw_input('Confirm delete (Y/N) ').upper()
-                if doit == 'Y':
-                    AcctArray.pop(acctnum)
-            
+            action = raw_input('(D)elete account, (R)eset connection, or (C)ancel? [C]: ').upper()
+            if action in ['D','R']:
+                actIndex = rlib1.get_int('Account #: [0] ') - 1
+                sitename = AcctArray[actIndex][0]
+                user=AcctArray[actIndex][3]
+                site = Sites.get(sitename, None)
+                if site<>None: url = rlib1.FieldVal(site,'url')      #example: url='https://test.ofx.com/my/script'
+
+                if actIndex <= len(AcctArray) and actIndex >= 0 and action=='D':
+                    #delete the account
+                    print "Deleting account", sitename, ":", AcctArray[actIndex][1]
+                    doit = raw_input('Confirm delete (Y/N) ').upper()
+                    if doit == 'Y':
+                        AcctArray.pop(actIndex)
+                        print 'Account %s @ %s deleted.' % (user, sitename)
+
+                if actIndex >= 0 and action in ['D','R'] and site<>None:
+                    #delete clientUID connection key if no other account has the same user/url combo
+                    found=False
+                    for acct in AcctArray:
+                        if acct[0]==sitename and acct[3]==user: found=True
+                    if not found:
+                        rlib1.clientUID(url, user, delKey=True)
+                        if action=='R': print 'Connection settings reset for %s @ %s' % (user, urlHost)
+                    
         elif menu_option == 4:
             #change security settings
             while True:
@@ -269,7 +355,7 @@ if __name__=="__main__":
             print '{0:4}{1:20}'.format(str(ticker_test)+'.','Stock/Fund Prices') 
             print "0.  None"
             separator_line()
-            acctnum = get_int('Test account #: [0] ')
+            acctnum = rlib1.get_int('Test account #: [0] ')
             if acctnum <= len(AcctArray) and acctnum <> 0:
                 acctnum = acctnum-1
                 acct = AcctArray[acctnum][0] + ' | ' + AcctArray[acctnum][1]
@@ -292,15 +378,15 @@ if __name__=="__main__":
             print "\tVersion:", AboutVersion
             print "\n\n"+"*"*70+"\n"
             raw_input('Press Enter to continue')
-            
-    #end_while (master menu)
+        
+    #end_while (main menu)
     
     pwkey_e = ''
     if pwkey <> '':
         #encrypt the data
         k = pyDes.des(pwkey)
         #encrypt the accounts
-        acctEncrypt(AcctArray,pwkey)
+        rlib1.acctEncrypt(AcctArray,pwkey)
         #encrypt the passkey
         pwkey_e = k.encrypt(pwkey, ' ')
   
