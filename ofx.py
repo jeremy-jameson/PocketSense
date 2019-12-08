@@ -63,6 +63,9 @@
 # 24Aug2018*rlc
 #   - Remove CLTCOOKIE from request.  Not supported by Money 2005+ or Quicken
 
+# 19Nov2019*rlc
+#   - Add site delay option
+
 import time, os, sys, httplib, urllib2, glob, random, re
 import getpass, scrubber, site_cfg, uuid
 from control2 import *
@@ -330,19 +333,17 @@ def getOFX(account, interval):
     #set the start date/time
     dtstart = time.strftime("%Y%m%d",time.localtime(time.time()-interval*86400))
     dtnow = time.strftime("%Y%m%d%H%M%S",time.localtime())
-  
+
+    #add delay prior to connect if defined for site
+    delay = FieldVal(site, "DELAY")
+    if delay > 0.0: 
+        print "Delaying %.1f seconds..." % delay
+        time.sleep(delay)
+
     client = OFXClient(site, user, password)
     print sitename,':',acct_num,": Getting records since: ",dtstart
     
     status = True
-    #we'll place ofx data transfers in xfrdir (defined in control2.py).  
-    #check to see if we have this directory.  if not, create it
-    if not os.path.exists(xfrdir):
-        try:
-            os.mkdir(xfrdir)
-        except:
-            print '** Error.  Could not create', xfrdir
-            system.exit()
     
     #remove illegal WinFile characters from the file name (in case someone included them in the sitename)
     #Also, the os.system() call doesn't allow the '&' char, so we'll replace it too
@@ -356,6 +357,7 @@ def getOFX(account, interval):
             query = client.acctQuery()
         else:
             caps = FieldVal(site, "CAPS")
+            
             if "CCSTMT" in caps:
                 query = client.ccQuery(acct_num, dtstart)
             elif "INVSTMT" in caps:

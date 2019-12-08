@@ -118,7 +118,7 @@ def scrub(filename, site):
 #                MM     = month (numeric)
 #                DD     = day (numeric)
 #                amt    = dollar amount of the transaction, including a hypen for negative entries (e.g., -24.95)
-#                #####  = 5 digit serial number
+#                #####  = 5 char value
 
 #   2.  The 5-digit serial number can change each time you connect to the server, 
 #          meaning that the same transaction can download with different FITID numbers.  

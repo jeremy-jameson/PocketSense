@@ -330,10 +330,10 @@ def validOFX(content):
     msg=''
     content = content.upper().rstrip()
     
-    if content == '': msg = 'No (null) statement received'
+    if content == '': msg = 'Null statement received'
     
     elif content.find('OFXHEADER:') < 0 and content.find('<OFX>') < 0 and content.find('</OFX>') < 0:
-        msg = 'Invalid OFX statement received'
+        msg = 'Invalid OFX statement detected'
         
     elif content.find('<SEVERITY>ERROR') > 0:
         msg = 'OFX message contains ERROR condition'

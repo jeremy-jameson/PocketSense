@@ -27,6 +27,9 @@
 #23Aug2018*rlc
 #   - bug fix w/ adding new account
 
+#16Sep2019*rlc
+#   - create ./import folder during setup
+
 import os, sys, glob, re, pickle, shutil, time, urllib2
 import pyDes, ofx, quotes, site_cfg, filecmp
 import rlib1  #common control/utilities
@@ -75,7 +78,7 @@ def list_accounts(showConnectKeys=False):
         i=i+1
    
 def config_account():
-   
+ 
     #configure account settings
     tmpfile='acctQuery.tmp'
     i=1
@@ -247,6 +250,21 @@ if __name__=="__main__":
         pwkey=rlib1.decrypt_pw(pwkey)
         rlib1.acctDecrypt(AcctArray, pwkey)
    
+    
+    #check system config for required folders
+    if not os.path.exists(xfrdir):
+        try:
+            os.mkdir(xfrdir)
+        except:
+            print '** Error.  Could not create', xfrdir
+            system.exit()
+    if not os.path.exists(importdir):
+        try:
+            os.mkdir(importdir)
+        except:
+            print '** Error.  Could not create', importdir
+            system.exit()
+
     #**********main menu***********
     menu_option = 1
     while menu_option <> 0:

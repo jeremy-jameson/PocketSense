@@ -32,7 +32,8 @@
 #                 -Added skipZeroTransactions option
 # 09Nov2017*rlc:  -Remove YahooScrape option no longer used
 #                 -Change alternate Yahoo url to json api
-# 22May2018*rlc:  -Added skipFailedLogon option
+# 22May2018*rlc:  -Add skipFailedLogon option
+# 19Nov2019*rlc:  -Add delay option for sites
 # ******************************************************************************
 
 #Entries are (FieldName : Value) pairs, one per line.  Spacing/Tabs are ignored.
@@ -77,6 +78,7 @@ skipFailedLogon: Yes        #If a connection to a site fails during Getdata, no 
 #   appVer          Alternate Application Version (default defined in control2.py)
 #   minInterval     Mininum number of days to download (overrides defaultInterval if needed)
 #   timeOffset      Add (-subtract) number of hours to statement DTASOF field(s).  Default = zero.
+#   delay           Delay (seconds) to add before requesting data for any account defined for the site
 
 #   * Valid AcctType entries:  
 #       CCSTMT = Credit card
@@ -99,6 +101,7 @@ skipFailedLogon: Yes        #If a connection to a site fails during Getdata, no 
     appver     : 
     mininterval:
     timeOffset :
+    delay      :
 </site>
 
 #SITE ENTRIES

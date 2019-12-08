@@ -150,6 +150,7 @@ class site_cfg:
                 appver = DefaultAppVer
                 mininterval = 0
                 timeOffset = 0.0
+                delay = 0.0
                 
             if '<SITE>' in lineU:
                 parsing = True
@@ -168,7 +169,9 @@ class site_cfg:
                               'APPID': appid,
                              'APPVER': appver,
                         'MININTERVAL': mininterval,
-                         'TIMEOFFSET': timeOffset }}
+                         'TIMEOFFSET': timeOffset,
+                              'DELAY': delay}
+                        }
                     self.sites.update(X)
                 
             #parse the site parameters for the current site
@@ -189,6 +192,7 @@ class site_cfg:
                     elif field == 'APPVER': appver = value
                     elif field == 'MININTERVAL': mininterval = int(value)
                     elif field == 'TIMEOFFSET': timeOffset = float(value)
+                    elif field == 'DELAY': delay = float(value)
                 
                 else:
                     #look for individual parameters while we're NOT parsing site info
@@ -245,7 +249,7 @@ class site_cfg:
 
                     if field == 'SKIPFAILEDLOGON':
                         self.skipFailedLogon = (value[:1].upper() == 'Y')  
-           
+                    
            #end_for line
         
         f.close()

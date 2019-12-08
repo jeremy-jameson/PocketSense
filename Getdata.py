@@ -46,10 +46,41 @@
 #     Added to help prevent accounts getting locked when a user changes their password, has multiple 
 #     accounts at the institution, but forgot to update their account settings in Setup.
 
-import os, sys, glob, time
-import ofx, quotes, site_cfg
+#16Sep2019*rlc
+#   - Add support for ofx import from ./import subfolder.  any file present in ./import will be inspected,
+#     and if it looks like a valid OFX file, will be processed the same as a downloaded statement (scrubbed, etc.)
+
+import os, sys, glob, time, re
+import ofx, quotes, site_cfg, scrubber
 from control2 import *
 from rlib1 import *
+
+userdat = site_cfg.site_cfg()
+
+def getSite(ofx):
+    # find matching site entry for ofx
+    # matches on FID or BANKID value found in ofx and in sites list
+    
+    #get fid value from ofx
+    site = None
+    p = re.compile(r'<FID>(.*?)[<\s]',re.IGNORECASE | re.DOTALL)
+    r = p.search(ofx)
+    fid = r.groups()[0] if r else 'undefined'
+    p = re.compile(r'<BANKID>(.*?)[<\s]',re.IGNORECASE | re.DOTALL)
+    r = p.search(ofx)
+    bankid = r.groups()[0] if r else 'undefined'
+    sites = userdat.sites
+    if fid or bankid:  
+        for s in sites:
+            if not site: site=sites[s]   #defaults to first site found, if matching fid/bankid not found
+            thisFid    = FieldVal(sites[s], 'fid')
+            thisBankid = FieldVal(sites[s], 'bankid')
+            if thisFid == fid or thisBankid == bankid:
+                site = sites[s]
+                print 'Matched import file to site *%s*' % s
+                break
+
+    return site
 
 if __name__=="__main__":
 
@@ -61,9 +92,6 @@ if __name__=="__main__":
     if len(doit) > 1: doit = doit[:1]    #keep first letter
     if doit == '': doit = 'Y'
     if doit in "YI":
-
-        userdat = site_cfg.site_cfg()
-        
         #get download interval, if promptInterval=Yes in sites.dat
         interval = userdat.defaultInterval
         if userdat.promptInterval:
@@ -92,7 +120,7 @@ if __name__=="__main__":
         print "Download interval= {0} days".format(interval)
         
         #create process Queue in the right order
-        Queue = ['Accts']
+        Queue = ['Accts', 'importFiles']
         if userdat.savetickersfirst:
             Queue.insert(0,'Quotes')
         else:
@@ -115,7 +143,42 @@ if __name__=="__main__":
                             ofxList.append([acct[0], acct[1], ofxFile])
                         stat1 = stat1 and status
                         print ""
+                
+            if QEntry == 'importFiles':
+                #process files from import folder [manual user downloaded files]
+                #include anything that looks like a valid ofx file regardless of extension
+                #attempts to find site entry by FID found in the ofx file
+                
+                print 'Searching %s for statements to import' % importdir
+                for f in glob.glob(importdir+'*.*'):
+                    fname     = os.path.basename(f)   #full base filename.extension
+                    bname = os.path.splitext(fname)[0]     #basename w/o extension
+                    bext  = os.path.splitext(fname)[1]     #file extension
+                    with open(f) as ifile:
+                        dat = ifile.read()
+
+                    #only import if it looks like an ofx file
+                    if validOFX(dat) == '':
+                        print "Importing %s" % fname
+                        if 'NEWFILEUID:PSIMPORT' not in dat[:200]:
+                            #only scrub if it hasn't already been imported (and hence, scrubbed)
+                            site = getSite(dat)
+                            scrubber.scrub(f, site)
                         
+                        #set NEWFILEUID:PSIMPORT to flag the file as having already been imported/scrubbed
+                        #don't want to accidentally scrub twice
+                        with open(f) as ifile:
+                            ofx = ifile.read()
+                        p = re.compile(r'NEWFILEUID:.*')
+                        ofx2 = p.sub('NEWFILEUID:PSIMPORT', ofx)
+                        if ofx2: 
+                            with open(f, 'w') as ofile:
+                                ofile.write(ofx2)
+                        #preserve origina file type but save w/ ofx extension
+                        outname = xfrdir+fname + ('' if bext=='.ofx' else '.ofx')
+                        os.rename(f, outname)
+                        ofxList.append(['import file', '', outname])
+                            
             #get stock/fund quotes
             if QEntry == 'Quotes' and getquotes:
                 status, quoteFile1, quoteFile2, htmFileName = quotes.getQuotes()
@@ -126,7 +189,7 @@ if __name__=="__main__":
                 print ""
 
                 # display the HTML file after download if requested to always do so
-                if status and userdat.showquotehtm: os.startfile(htmFileName)
+                if status and userdat.showquotehtm: os.startfile(htmFileName)                            
 
         if len(ofxList) > 0:
             print '\nFinished downloading data\n'
