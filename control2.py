@@ -22,7 +22,7 @@ Debug = False             #debug mode = true only when testing
 #Debug = True
 
 AboutTitle    = 'PocketSense OFX Download Python Scripts'
-AboutVersion  = '20-Nov-2019'
+AboutVersion  = '04-Jan-2020'
 AboutSource   = 'http://sites.google.com/site/pocketsense'
 AboutName     = 'Robert'
 

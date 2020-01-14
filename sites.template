@@ -34,6 +34,7 @@
 #                 -Change alternate Yahoo url to json api
 # 22May2018*rlc:  -Add skipFailedLogon option
 # 19Nov2019*rlc:  -Add delay option for sites
+# 04Jan2019*rlc:  -Remove support for Google Finance quotes.
 # ******************************************************************************
 
 #Entries are (FieldName : Value) pairs, one per line.  Spacing/Tabs are ignored.
@@ -155,14 +156,12 @@ skipFailedLogon: Yes        #If a connection to a site fails during Getdata, no 
 #--------------------------------------------------------------------------------
 
 EnableYahooFinance: Yes       # Enable quote lookup on Yahoo Finance
-EnableGoogleFinance: Yes      # Enable quote lookup on Google Finance
 YahooTimeZone: -5:EST         # Timezone rule for the Yahoo quote server (default = -5:EST).
 ShowQuoteHTM: No              # Always show quotes.htm from Getdata
 AskQuoteHTM: Yes              # Ask to show quotes.htm from Getdata (overrides ShowQuoteHTM)
 ForceQuotes: No               # Force Money to record a transaction when importing quotes*
 
 #YahooURL:  http://query1.finance.yahoo.com/v7/finance/quote
-#GoogleURL: https://finance.google.com/finance
 #QuoteCurrency: USD           # Currency for quotes.  Default = USD
 #QuoteAccount: 0123456789USD  # Custom account number for Quotes.  Default = 0123456789
                               # Account number can contain alpha-numeric (e.g., 123456789USD is valid)
@@ -184,7 +183,6 @@ ForceQuotes: No               # Force Money to record a transaction when importi
 
 <stocks> 
     #--- indexes ---
-    INDEXDJX:.DJI s:.DJI    #Dow Jones (Google Finance)
     ^GSPC                   #S&P 500
     ^IXIC                   #NASDAQ Composite
     BP.L  m:0.01 s:BP       # BP @ London stock exchange (quote = pennies)
@@ -202,7 +200,6 @@ ForceQuotes: No               # Force Money to record a transaction when importi
 <funds>
     MBFIX	                #Wells fargo total return bond I
     AGTHX                   #Growth fund of america
-    MUTF_CA:RBF460          #quote from Toronto exchange (Google Finace)
 </funds>
 
 
